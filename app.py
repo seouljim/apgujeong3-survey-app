@@ -27,14 +27,39 @@ def get_secret(name, default=""):
     except Exception: pass
     return os.getenv(name, default)
 
-SUPABASE_URL = get_secret("SUPABASE_URL")
+def clean_supabase_url(url: str) -> str:
+    """
+    Streamlit Secrets에 Supabase Project URL 대신 Data API URL을 넣은 경우를 자동 보정합니다.
+
+    올바른 값:
+    https://xxxx.supabase.co
+
+    잘못 들어가기 쉬운 값:
+    https://xxxx.supabase.co/rest/v1
+    """
+    url = str(url or "").strip().strip('"').strip("'")
+    for suffix in ["/rest/v1/", "/rest/v1"]:
+        if url.endswith(suffix):
+            url = url[: -len(suffix)]
+    return url.rstrip("/")
+
+
+SUPABASE_URL = clean_supabase_url(get_secret("SUPABASE_URL"))
 SUPABASE_KEY = get_secret("SUPABASE_SERVICE_ROLE_KEY") or get_secret("SUPABASE_ANON_KEY")
+SUPABASE_KEY = str(SUPABASE_KEY or "").strip().strip('"').strip("'")
 ADMIN_PASSWORD = get_secret("SURVEY_ADMIN_PASSWORD", "admin123")
 
 @st.cache_resource
 def get_supabase() -> Client:
     if not SUPABASE_URL or not SUPABASE_KEY:
-        st.error("Supabase 연결 정보가 없습니다. Streamlit Secrets를 확인해 주세요."); st.stop()
+        st.error("Supabase 연결 정보가 없습니다. Streamlit Secrets를 확인해 주세요.")
+        st.stop()
+
+    if "/rest/v1" in SUPABASE_URL:
+        st.error("SUPABASE_URL에 /rest/v1 이 포함되어 있습니다. Project URL만 입력해야 합니다.")
+        st.code('SUPABASE_URL = "https://프로젝트ID.supabase.co"')
+        st.stop()
+
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def normalize_text(x): return str(x).strip().replace(" ", "")
@@ -106,36 +131,78 @@ def rank_selectors(title, options, prefix, count=5, allow_skip=False):
         with cols[i]: selected.append(st.selectbox(f"{i+1}순위", select_options, key=f"{prefix}_{i}"))
     return selected
 
+def restore_survey_values_to_widgets():
+    """최종확인 화면에서 설문 수정하기로 돌아왔을 때 기존 선택값을 복원합니다."""
+    s = st.session_state.get("survey", {})
+    if not s:
+        return
+
+    restore_map = {
+        "family_plan_widget": s.get("family_plan"),
+        "family_count_widget": s.get("family_count") or 2,
+        "plan_preference_widget": s.get("plan_preference"),
+        "room_count_widget": s.get("room_count"),
+        "household_split_widget": s.get("household_split"),
+        "hope_size_widget": s.get("hope_size"),
+        "parking_widget": s.get("parking"),
+        "parking_other_widget": s.get("parking_other", ""),
+        "community_other_widget": s.get("community_other", ""),
+        "landscape_other_widget": s.get("landscape_other", ""),
+        "semi_residential_other_widget": s.get("semi_residential_other", ""),
+        "memo_widget": s.get("memo", ""),
+    }
+
+    for key, value in restore_map.items():
+        if value is not None:
+            st.session_state[key] = value
+
+    for i in range(5):
+        st.session_state[f"factor_{i}"] = s.get(f"factor_rank_{i+1}", IMPORTANT_FACTORS[i])
+        st.session_state[f"community_{i}"] = s.get(f"community_rank_{i+1}", "선택 안함")
+        st.session_state[f"landscape_{i}"] = s.get(f"landscape_rank_{i+1}", "선택 안함")
+
+    semi = s.get("semi_residential", "")
+    if semi:
+        st.session_state["semi_residential_widget"] = [x.strip() for x in semi.split(",") if x.strip()]
+    else:
+        st.session_state["semi_residential_widget"] = []
+
+
 def render_step2():
     v = st.session_state.verified
+
+    if st.session_state.get("restore_survey_values", False):
+        restore_survey_values_to_widgets()
+        st.session_state.restore_survey_values = False
+
     st.subheader("2단계. 설문조사")
     st.caption(f"확인 정보: {v['name']} / {v['existing_dong']} {v['existing_ho']} / 현재 {v['existing_size']}")
     with st.expander("Q01. 입주 가족인원·희망 평면·방 개수", expanded=True):
-        family_plan = st.radio("입주 계획 여부", FAMILY_PLAN_OPTIONS, horizontal=True)
-        family_count = st.number_input("입주 시 함께 거주하실 가족인원 수", 1, 20, 2, 1) if family_plan == "입주 계획 있음" else None
-        plan_preference = st.radio("희망하시는 평면", PLAN_OPTIONS)
-        room_count = st.radio("희망하시는 방의 개수", ROOM_OPTIONS, horizontal=True)
+        family_plan = st.radio("입주 계획 여부", FAMILY_PLAN_OPTIONS, horizontal=True, key="family_plan_widget")
+        family_count = st.number_input("입주 시 함께 거주하실 가족인원 수", 1, 20, 2, 1, key="family_count_widget") if family_plan == "입주 계획 있음" else None
+        plan_preference = st.radio("희망하시는 평면", PLAN_OPTIONS, key="plan_preference_widget")
+        room_count = st.radio("희망하시는 방의 개수", ROOM_OPTIONS, horizontal=True, key="room_count_widget")
     with st.expander("Q02. 세대구분형 옵션 희망 여부", expanded=True):
         st.caption("출입구 분리를 위해 분양면적 60평형 이상만 적용 가능합니다.")
-        household_split = st.radio("세대구분형 옵션", HOUSEHOLD_SPLIT_OPTIONS, horizontal=True)
+        household_split = st.radio("세대구분형 옵션", HOUSEHOLD_SPLIT_OPTIONS, horizontal=True, key="household_split_widget")
     with st.expander("Q03. 평형 외 가장 중요하게 생각하는 요소", expanded=True):
         factor_rank = rank_selectors("중요한 순서대로 선택해 주세요.", IMPORTANT_FACTORS, "factor", 5)
     with st.expander("Q04. 희망 평형", expanded=True):
         st.caption("원하는 평형 1곳을 선택해 주세요.")
-        hope_size = st.radio("희망 평형", HOPE_SIZE_OPTIONS)
+        hope_size = st.radio("희망 평형", HOPE_SIZE_OPTIONS, key="hope_size_widget")
     with st.expander("Q05. 희망 세대당 주차대수", expanded=False):
-        parking = st.radio("희망하시는 세대당 주차대수", PARKING_OPTIONS, horizontal=True)
-        parking_other = st.text_input("주차대수 기타 의견", placeholder="예: 3.5대 이상") if parking == "기타" else ""
+        parking = st.radio("희망하시는 세대당 주차대수", PARKING_OPTIONS, horizontal=True, key="parking_widget")
+        parking_other = st.text_input("주차대수 기타 의견", placeholder="예: 3.5대 이상", key="parking_other_widget") if parking == "기타" else ""
     with st.expander("Q06. 희망 커뮤니티 시설", expanded=False):
         community_rank = rank_selectors("선호하는 순서대로 선택해 주세요.", COMMUNITY_OPTIONS, "community", 5, True)
-        community_other = st.text_input("커뮤니티 기타 의견", placeholder="예: 의료상담실, 소규모 강의실 등")
+        community_other = st.text_input("커뮤니티 기타 의견", placeholder="예: 의료상담실, 소규모 강의실 등", key="community_other_widget")
     with st.expander("Q07. 희망 조경시설", expanded=False):
         landscape_rank = rank_selectors("선호하는 순서대로 선택해 주세요.", LANDSCAPE_OPTIONS, "landscape", 5, True)
-        landscape_other = st.text_input("조경시설 기타 의견", placeholder="예: 반려견 산책로 등")
+        landscape_other = st.text_input("조경시설 기타 의견", placeholder="예: 반려견 산책로 등", key="landscape_other_widget")
     with st.expander("Q08. 준주거용지 특화계획시설", expanded=False):
-        semi_residential = st.multiselect("희망하시는 시설을 선택해 주세요.", SEMI_RESIDENTIAL_OPTIONS)
-        semi_residential_other = st.text_input("준주거용지 기타 의견", placeholder="희망 시설을 입력해 주세요.") if "기타" in semi_residential else ""
-    memo = st.text_area("추가 의견", placeholder="선택 사항입니다.", height=100)
+        semi_residential = st.multiselect("희망하시는 시설을 선택해 주세요.", SEMI_RESIDENTIAL_OPTIONS, key="semi_residential_widget")
+        semi_residential_other = st.text_input("준주거용지 기타 의견", placeholder="희망 시설을 입력해 주세요.", key="semi_residential_other_widget") if "기타" in semi_residential else ""
+    memo = st.text_area("추가 의견", placeholder="선택 사항입니다.", height=100, key="memo_widget")
     st.divider(); c1, c2 = st.columns(2)
     with c1:
         if st.button("이전 단계로", use_container_width=True): go_step(1)

@@ -325,7 +325,17 @@ def image_page(n):
 
 
 def sanitize_filename(name):
-    return re.sub(r"[^가-힣a-zA-Z0-9_.-]+", "_", name or "attachment")[:120]
+    """
+    Supabase Storage object key는 한글/공백/특수문자가 섞이면 InvalidKey가 날 수 있습니다.
+    파일명은 DB에 원본명으로 따로 저장하고, Storage 저장용 key는 ASCII만 사용합니다.
+    """
+    name = str(name or "attachment")
+    suffix = Path(name).suffix.lower()
+    if not suffix or len(suffix) > 10:
+        suffix = ".bin"
+    # 확장자도 혹시 특수문자가 있으면 정리
+    suffix = re.sub(r"[^a-z0-9.]", "", suffix)
+    return suffix
 
 
 def upload_attachment(unit_key):
@@ -337,14 +347,13 @@ def upload_attachment(unit_key):
         raise ValueError("첨부파일은 50MB 이하만 가능합니다.")
 
     sb = get_supabase()
-    safe = sanitize_filename(uploaded.name)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ext = sanitize_filename(uploaded.name)
+    ts = datetime.now().strftime("%Y%m%d%H%M%S")
+    short_key = re.sub(r"[^a-zA-Z0-9]", "", str(unit_key))[:16]
 
-    # Supabase Storage에서 object key 오류를 피하기 위해
-    # 폴더 구분자(/) 없이 안전한 파일명으로 저장합니다.
-    # 기존: {unit_key}/{timestamp}_{filename}
-    # 수정: upload_{unit_key}_{timestamp}_{filename}
-    path = f"upload_{unit_key}_{ts}_{safe}"
+    # Storage용 key는 ASCII/숫자/언더바/점만 사용합니다.
+    # 원본 파일명은 attachment_name 컬럼에 따로 저장합니다.
+    path = f"att_{short_key}_{ts}{ext}"
 
     try:
         sb.storage.from_(STORAGE_BUCKET).upload(
@@ -364,7 +373,6 @@ def upload_attachment(unit_key):
         "attachment_type": uploaded.type,
         "attachment_size": int(uploaded.size),
     }
-
 
 def current_size_final(data):
     return data.get("current_size_other") if data.get("current_size") == "기타" else data.get("current_size")
@@ -448,7 +456,7 @@ def render_admin():
 
 
 def render_page():
-    st.markdown("#### 종이 설문지 재현형 v0.7.2.2")
+    st.markdown("#### 종이 설문지 재현형 v0.7.3.3.2")
     st.caption("한 장씩 넘기듯 진행합니다. 이전/다음 장을 오가도 입력값은 유지됩니다.")
     st.progress(st.session_state.page_idx / PAGE_COUNT)
     n = st.session_state.page_idx

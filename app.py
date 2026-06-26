@@ -332,13 +332,38 @@ def upload_attachment(unit_key):
     uploaded = st.session_state.get("upload_file")
     if not uploaded:
         return {"attachment_path": None, "attachment_name": None, "attachment_type": None, "attachment_size": None}
+
     if uploaded.size > MAX_UPLOAD_BYTES:
         raise ValueError("첨부파일은 50MB 이하만 가능합니다.")
+
     sb = get_supabase()
     safe = sanitize_filename(uploaded.name)
-    path = f"{unit_key}/{datetime.now().strftime('%Y%m%d_%H%M%S')}_{safe}"
-    sb.storage.from_(STORAGE_BUCKET).upload(path, uploaded.getvalue(), file_options={"content-type": uploaded.type or "application/octet-stream", "upsert": "true"})
-    return {"attachment_path": path, "attachment_name": uploaded.name, "attachment_type": uploaded.type, "attachment_size": int(uploaded.size)}
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # Supabase Storage에서 object key 오류를 피하기 위해
+    # 폴더 구분자(/) 없이 안전한 파일명으로 저장합니다.
+    # 기존: {unit_key}/{timestamp}_{filename}
+    # 수정: upload_{unit_key}_{timestamp}_{filename}
+    path = f"upload_{unit_key}_{ts}_{safe}"
+
+    try:
+        sb.storage.from_(STORAGE_BUCKET).upload(
+            path,
+            uploaded.getvalue(),
+            file_options={
+                "content-type": uploaded.type or "application/octet-stream",
+                "x-upsert": "true",
+            },
+        )
+    except Exception as e:
+        raise ValueError(f"첨부파일 저장 오류: {e}")
+
+    return {
+        "attachment_path": path,
+        "attachment_name": uploaded.name,
+        "attachment_type": uploaded.type,
+        "attachment_size": int(uploaded.size),
+    }
 
 
 def current_size_final(data):
@@ -423,7 +448,7 @@ def render_admin():
 
 
 def render_page():
-    st.markdown("#### 종이 설문지 재현형 v0.7.1")
+    st.markdown("#### 종이 설문지 재현형 v0.7.2.2")
     st.caption("한 장씩 넘기듯 진행합니다. 이전/다음 장을 오가도 입력값은 유지됩니다.")
     st.progress(st.session_state.page_idx / PAGE_COUNT)
     n = st.session_state.page_idx

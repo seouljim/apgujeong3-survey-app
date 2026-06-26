@@ -135,6 +135,12 @@ def init_state():
         st.session_state.submitted_ok = False
 
 
+def normalize_text(x):
+    return str(x or "").strip().replace(" ", "")
+
+
+
+
 def k(name): return f"f_{name}"
 def get(name, default=None): return st.session_state.data.get(name, default)
 def set_default(name, default=None):
@@ -417,7 +423,7 @@ def render_admin():
 
 
 def render_page():
-    st.markdown("#### 종이 설문지 재현형")
+    st.markdown("#### 종이 설문지 재현형 v0.7.1")
     st.caption("한 장씩 넘기듯 진행합니다. 이전/다음 장을 오가도 입력값은 유지됩니다.")
     st.progress(st.session_state.page_idx / PAGE_COUNT)
     n = st.session_state.page_idx
